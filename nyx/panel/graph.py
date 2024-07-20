@@ -153,6 +153,13 @@ class GraphData(object):
     return self.total / max(1, self.tick)
 
   def update(self, new_value):
+    bw_burst = tor_controller().get_effective_rate(None, burst = True)
+
+    # On spike keep the last value once more.
+    # Can do better, but works for now.
+    if new_value > bw_burst:
+      new_value = self.latest_value
+
     self.latest_value = new_value
     self.total += new_value
     self.tick += 1
@@ -306,19 +313,36 @@ class BandwidthStats(GraphCategory):
       bw_entries, is_successful = controller.get_info('bw-event-cache', None), True
 
       if bw_entries:
-        for entry in bw_entries.split():
-          entry_comp = entry.split(',')
+        bw_burst = tor_controller().get_effective_rate(None, burst = True)
+        bw_entries = bw_entries.split()
+
+        for i in range(0, len(bw_entries)):
+          entry_comp = bw_entries[i].split(',')
 
           if len(entry_comp) != 2 or not entry_comp[0].isdigit() or not entry_comp[1].isdigit():
             log.warn("Tor's 'GETINFO bw-event-cache' provided malformed output: %s" % bw_entries)
             is_successful = False
             break
 
-          self.primary.update(int(entry_comp[0]))
-          self.secondary.update(int(entry_comp[1]))
+          entry_comp_int = [int(entry_comp[0]), int(entry_comp[1])]
+
+          if entry_comp_int[0] > bw_burst and entry_comp_int[1] > bw_burst:
+            if bw_entries[i+1] and bw_entries[i-1]:
+              # Calculate the average of adjacent values to replace the spike value
+              entry_comp_m1 = bw_entries[i-1].split(',')
+              entry_comp_p1 = bw_entries[i+1].split(',')
+              avg = [int((int(entry_comp_m1[0]) + int(entry_comp_p1[0])) / 2), int((int(entry_comp_m1[1]) + int(entry_comp_p1[1])) / 2)]
+              self.primary.update(avg[0])
+              self.secondary.update(avg[1])
+            else:
+              self.primary.update(0)
+              self.secondary.update(0)
+          else:
+            self.primary.update(entry_comp_int[0])
+            self.secondary.update(entry_comp_int[1])
 
         if is_successful:
-          log.info('Bandwidth graph has information for the last %s' % str_tools.time_label(len(bw_entries.split()), is_long = True))
+          log.info('Bandwidth graph has information for the last %s' % str_tools.time_label(len(bw_entries), is_long = True))
 
       read_total = controller.get_info('traffic/read', None)
       write_total = controller.get_info('traffic/written', None)
